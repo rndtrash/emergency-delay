@@ -14,8 +14,8 @@
 queue_t packet_queue;
 
 const char messij[] = "Hellorld";
-const char messij2[] = "Penice";
-const char messij3[] = "Chode";
+const char messij2[] = "Test1";
+const char messij3[] = "Test2";
 
 void edelay_queue_print_free() {
     printf("free %zu/%zu\n", queue_free_space(&packet_queue), packet_queue.size);
