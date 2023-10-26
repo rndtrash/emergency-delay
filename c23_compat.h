@@ -15,10 +15,10 @@
 
 #include <cstddef>
 
-/* C2x/C23 or later? If GCC, is it version 13 or newer? */
+/* C23 or later? If GCC, is it version 13 or newer? */
 #elif (\
-        defined(__STDC__) && defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 202000L) || \
-        (defined(__GNUC__) && __GNUC__ >= 13 || !defined(__GNUC__))                        \
+        defined(__STDC__) && defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 202311L) || \
+        defined(__GNUC__) && __GNUC__ >= 13 \
 )
 
 #include <stddef.h> /* nullptr_t */
@@ -35,12 +35,12 @@ typedef void *nullptr_t;
  * https://en.cppreference.com/w/c/compiler_support/23
  */
 
-/* C++17 or later? C2x/C23 or later? If GCC, is it version 10 or newer? If clang, is it version 9 or newer? */
+/* C++17 or later? C23 or later? If GCC, is it version 10 or newer? If clang, is it version 9 or newer? */
 #if (\
         defined(__cplusplus) && __cplusplus >= 201703L || \
-        defined(__STDC__) && defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 202000L) || \
-        (defined(__GNUC__) && __GNUC__ >= 10 || !defined(__GNUC__)) || \
-        (defined(__clang_major__) && __clang_major__ >= 9)\
+        defined(__STDC__) && defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 202311L) || \
+        defined(__GNUC__) && __GNUC__ >= 10 || \
+        defined(__clang_major__) && __clang_major__ >= 9\
 )
 
 #define NODISCARD [[nodiscard]]
