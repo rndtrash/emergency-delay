@@ -4,11 +4,14 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <assert.h>
 
 #include "queue.h"
 #include "c23_compat.h"
 
 #define PORT 1935
+
+#define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
 queue_t packet_queue;
 
@@ -17,38 +20,43 @@ const char messij2[] = "Test1";
 const char messij3[] = "Test2";
 
 void edelay_queue_print_free() {
-    printf("free %zu/%zu\n", queue_free_space(&packet_queue), packet_queue.size);
+    printf("free %zu/%zu\n", queue_free_space(&packet_queue), queue_size(&packet_queue));
 }
 
 void edelay_push_message(const char *message, ssize_t size) {
-    char *p = queue_push_acquire(&packet_queue, size);
-    if (p == nullptr) {
+    bool success = queue_push(&packet_queue, size, message);
+    if (!success) {
         perror("Epic push fail");
         exit(EXIT_FAILURE);
     }
 
-    memcpy(p, message, size);
-    queue_push_release(&packet_queue);
     edelay_queue_print_free();
 }
 
-void edelay_pop_verify(const char *message, ssize_t size) {
-    char *p = queue_pop_acquire(&packet_queue);
-    if (p == nullptr) {
+bool edelay_pop_verify(const char *message, ssize_t size) {
+    bool success = true;
+
+    char buffer[QUEUE_ITEM_BUFFER_SIZE];
+    ssize_t read;
+    bool result = queue_pop(&packet_queue, sizeof(buffer) / sizeof(char), buffer, &read);
+    printf("Have read %zd bytes\n", read);
+    if (!result || read < size) {
         perror("Epic pop fail");
         exit(EXIT_FAILURE);
     }
 
-    if (strncmp(p, message, size) != 0) {
+    if (strncmp(buffer, message, MIN(size, read)) != 0) {
         printf("Not equal to %s\n", message);
+        success = false;
     }
 
-    queue_pop_release(&packet_queue);
     edelay_queue_print_free();
+
+    return success;
 }
 
 int main(void) {
-    if (!queue_init(&packet_queue, 9, /*QUEUE_OVERFLOW_LOOP_REPLACE | */QUEUE_OVERFLOW_RESIZE)) {
+    if (!queue_init(&packet_queue, 4 * QUEUE_ITEM_SIZE, QUEUE_OVERFLOW_RESIZE)) {
         perror("queue init failed");
         exit(EXIT_FAILURE);
     }
@@ -58,12 +66,12 @@ int main(void) {
         edelay_push_message(messij2, sizeof(messij2));
         edelay_push_message(messij3, sizeof(messij3));
 
-        edelay_pop_verify(messij, sizeof(messij));
-        edelay_pop_verify(messij3, sizeof(messij3));
-        edelay_pop_verify(messij3, sizeof(messij3));
+        assert(edelay_pop_verify(messij, sizeof(messij)) == true);
+        assert(edelay_pop_verify(messij3, sizeof(messij3)) == false);
+        assert(edelay_pop_verify(messij3, sizeof(messij3)) == true);
 
         edelay_push_message(messij, sizeof(messij));
-        edelay_pop_verify(messij, sizeof(messij));
+        assert(edelay_pop_verify(messij, sizeof(messij)) == true);
     }
 
     // TODO: the rest of the fucking owl
