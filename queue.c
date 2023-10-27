@@ -14,8 +14,9 @@ bool queue_init(queue_t *queue, ssize_t initial_capacity, queue_overflow_behavio
     if (queue == nullptr)
         return false;
 
-    queue->overflow_behavior = overflow_behavior;
+    bzero(queue, sizeof(*queue));
 
+    queue->overflow_behavior = overflow_behavior;
     queue->start = 0;
     queue->end = 0;
     queue->size = (initial_capacity + QUEUE_ITEM_BUFFER_SIZE - 1) / QUEUE_ITEM_BUFFER_SIZE;
