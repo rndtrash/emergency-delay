@@ -28,7 +28,7 @@ typedef struct {
 } queue_item_header_t;
 
 #define QUEUE_ITEM_SIZE (2048)
-#define QUEUE_ITEM_BUFFER_SIZE (QUEUE_ITEM_SIZE - sizeof(queue_item_header_t))
+#define QUEUE_ITEM_BUFFER_SIZE (QUEUE_ITEM_SIZE - (ssize_t)sizeof(queue_item_header_t))
 
 typedef struct {
     queue_item_header_t header;
