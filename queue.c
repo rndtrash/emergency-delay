@@ -10,7 +10,7 @@
 
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
-bool queue_init(queue_t *queue, ssize_t initial_capacity, queue_overflow_behavior_t overflow_behavior) {
+bool queue_init(queue_t *queue, const ssize_t initial_capacity, const queue_overflow_behavior_t overflow_behavior) {
     if (queue == nullptr)
         return false;
 
@@ -47,25 +47,28 @@ void queue_destroy(queue_t *queue) {
     assert(pthread_mutex_destroy(&queue->push_lock) == 0);
 }
 
-static ssize_t queue_free_space_chunks(queue_t *queue) {
+static ssize_t queue_free_space_chunks(const queue_t *queue) {
     if (queue == nullptr)
         return 0;
 
     if (queue->start <= queue->end)
         return queue->size - queue->end + queue->start;
-    else
-        return queue->start - queue->end;
+    return queue->start - queue->end;
 }
 
-ssize_t queue_free_space(queue_t *queue) {
+bool queue_is_empty(const queue_t *queue) {
+    return queue->start == queue->end;
+}
+
+ssize_t queue_free_space(const queue_t *queue) {
     return queue_free_space_chunks(queue) * QUEUE_ITEM_BUFFER_SIZE;
 }
 
-ssize_t queue_size(queue_t *queue) {
+ssize_t queue_size(const queue_t *queue) {
     return queue->size * QUEUE_ITEM_BUFFER_SIZE;
 }
 
-static bool queue_resize_internal(queue_t *queue, ssize_t new_capacity, bool push_locked) {
+static bool queue_resize_internal(queue_t *queue, ssize_t new_capacity, const bool push_locked) {
     if (queue == nullptr || queue->buffer == nullptr)
         return false;
 
@@ -102,7 +105,7 @@ static bool queue_resize_internal(queue_t *queue, ssize_t new_capacity, bool pus
     queue->size = new_capacity;
     success = true;
 
-    fail:
+fail:
     pthread_mutex_unlock(&queue->pop_lock);
     if (!push_locked)
         pthread_mutex_unlock(&queue->push_lock);
@@ -110,20 +113,20 @@ static bool queue_resize_internal(queue_t *queue, ssize_t new_capacity, bool pus
     return success;
 }
 
-bool queue_resize(queue_t *queue, ssize_t new_capacity) {
+bool queue_resize(queue_t *queue, const ssize_t new_capacity) {
     return queue_resize_internal(queue, new_capacity, false);
 }
 
 NODISCARD
 
-static bool queue_push_chunk(queue_t *queue, ssize_t size, bool continued, const char *buffer) {
+static bool queue_push_chunk(queue_t *queue, const ssize_t size, const bool continued, const char *buffer) {
     if (queue_free_space_chunks(queue) == 0)
         // TODO: handle the overflow gracefully with queue->overflow_behavior
         return false;
 
     assert(size <= QUEUE_ITEM_BUFFER_SIZE);
 
-    ssize_t index = queue->end;
+    const ssize_t index = queue->end;
     queue->end++;
     if (queue->end >= queue->size)
         queue->end -= queue->size;
@@ -148,11 +151,11 @@ bool queue_push(queue_t *queue, ssize_t size, const char *buffer) {
 
     pthread_mutex_lock(&queue->push_lock);
 
-    ssize_t chunks = (size + QUEUE_ITEM_BUFFER_SIZE - 1) / QUEUE_ITEM_BUFFER_SIZE;
-    ssize_t end_initial = queue->end;
+    const ssize_t chunks = (size + QUEUE_ITEM_BUFFER_SIZE - 1) / QUEUE_ITEM_BUFFER_SIZE;
+    const ssize_t end_initial = queue->end;
     for (int i = 0; i < chunks && size > 0; i++) {
-        ssize_t size_to_push = MIN(QUEUE_ITEM_BUFFER_SIZE, size);
-        bool has_more_chunks = i != chunks - 1;
+        const ssize_t size_to_push = MIN(QUEUE_ITEM_BUFFER_SIZE, size);
+        const bool has_more_chunks = i != chunks - 1;
         if (!queue_push_chunk(queue, size_to_push, has_more_chunks, buffer)) {
             // Undo all the chunks
             queue->end = end_initial;
@@ -164,7 +167,7 @@ bool queue_push(queue_t *queue, ssize_t size, const char *buffer) {
     }
     success = true;
 
-    fail:
+fail:
     pthread_mutex_unlock(&queue->push_lock);
 
     return success;
@@ -186,7 +189,7 @@ bool queue_pop(queue_t *queue, ssize_t size, char *buffer, ssize_t *written) {
     ssize_t pop_size = 0;
     do {
         queue_item_t *item = &queue->buffer[queue->start];
-        ssize_t size_to_pop = MIN(item->header.size, size);
+        const ssize_t size_to_pop = MIN(item->header.size, size);
 
         memcpy(buffer, item->buffer + item->header.offset, size_to_pop);
 
@@ -214,7 +217,7 @@ bool queue_pop(queue_t *queue, ssize_t size, char *buffer, ssize_t *written) {
     // Count how many chunks have we missed
     ssize_t start_temp = queue->start;
     while (has_more_chunks) {
-        queue_item_t *item = &queue->buffer[start_temp];
+        const queue_item_t *item = &queue->buffer[start_temp];
         assert(item->header.offset == 0);
         chunks_size += item->header.size;
         has_more_chunks = item->header.continued;
@@ -225,8 +228,8 @@ bool queue_pop(queue_t *queue, ssize_t size, char *buffer, ssize_t *written) {
 
         if (has_more_chunks
             && (start_temp <= queue->end
-                ? queue->size - queue->end + start_temp
-                : start_temp - queue->end) <= 0)
+                    ? queue->size - queue->end + start_temp
+                    : start_temp - queue->end) <= 0)
             has_more_chunks = false;
 
         if (has_more_chunks)

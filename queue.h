@@ -6,7 +6,7 @@
 #define EMERGENCY_DELAY_QUEUE_H
 
 #include <pthread.h>
-#include <stddef.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 
 #include "c23_compat.h"
@@ -44,15 +44,15 @@ typedef struct {
     /**
      * The start of the queue in chunks
      */
-    ssize_t start;
+    _Atomic ssize_t start;
     /**
      * The end of the queue in chunks
      */
-    ssize_t end;
+    _Atomic ssize_t end;
     /**
      * The size of the queue in chunks
      */
-    ssize_t size;
+    _Atomic ssize_t size;
     queue_item_t *buffer;
 } queue_t;
 
@@ -75,12 +75,20 @@ bool queue_init(queue_t *queue, ssize_t initial_capacity, queue_overflow_behavio
 void queue_destroy(queue_t *queue);
 
 /**
+ * Does the queue contain any element?
+ *
+ * @param [in] queue a pointer to the queue
+ * @returns true if the queue is empty, false otherwise
+ */
+bool queue_is_empty(const queue_t *queue);
+
+/**
  * Get the space available in the queue.
  *
  * @param [in] queue a pointer to the queue
  * @returns Amount of free space in the queue in bytes
  */
-ssize_t queue_free_space(queue_t *queue);
+ssize_t queue_free_space(const queue_t *queue);
 
 /**
  * Get the size of the queue buffer
@@ -88,7 +96,7 @@ ssize_t queue_free_space(queue_t *queue);
  * @param [in] queue a pointer to the queue
  * @returns Size of the buffer in bytes
  */
-ssize_t queue_size(queue_t *queue);
+ssize_t queue_size(const queue_t *queue);
 
 /**
  * Extend or shrink the queue buffer while keeping the queue items in tact.

@@ -1,6 +1,7 @@
 #include <netdb.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <netinet/in.h>
 #include <stdlib.h>
@@ -12,11 +13,12 @@
 #include "c23_compat.h"
 
 #define PORT "1935"
-#define DELAY_MS 1000
+#define DELAY_US 1000000
 
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
 queue_t packet_queue;
+atomic_bool client_connected = false;
 
 const char messij[] = "Hellorld";
 const char messij2[] = "Test1";
@@ -36,7 +38,7 @@ void edelay_push_message(const char *message, const ssize_t size) {
     edelay_queue_print_free();
 }
 
-bool edelay_pop_verify(const char *message, ssize_t size) {
+bool edelay_pop_verify(const char *message, const ssize_t size) {
     bool success = true;
 
     char buffer[QUEUE_ITEM_BUFFER_SIZE];
@@ -56,6 +58,45 @@ bool edelay_pop_verify(const char *message, ssize_t size) {
     edelay_queue_print_free();
 
     return success;
+}
+
+void *edelay_resend_thread(void *arg) {
+    // TODO: connect to the destination server
+
+    usleep(DELAY_US);
+
+    char buffer[2048];
+    ssize_t written;
+    while (client_connected) {
+        while (queue_is_empty(&packet_queue)) {
+            sleep(0);
+        }
+
+        // Repeat until we pop out the whole entry
+        do {
+            if (!queue_pop(&packet_queue, sizeof buffer, buffer, &written)) {
+                fprintf(stderr, "queue pop fail\n");
+                exit(EXIT_FAILURE);
+            }
+
+            if (written > 0)
+                fwrite(buffer, sizeof(char), written, stdout);
+            else if (written < 0)
+                fwrite(buffer, sizeof(char), sizeof(buffer) / sizeof(char), stdout);
+        } while (written < 0);
+    }
+
+    return nullptr;
+}
+
+pthread_t edelay_spawn_thread() {
+    client_connected = true;
+
+    pthread_t thread_id;
+    pthread_create(&thread_id, NULL, edelay_resend_thread, nullptr);
+    pthread_detach(thread_id);
+
+    return thread_id;
 }
 
 int main(void) {
@@ -144,29 +185,33 @@ int main(void) {
     while (true) {
         struct sockaddr_storage their_addr;
         socklen_t sin_size = sizeof their_addr;
-        int client_fd = accept(socket_fd, (struct sockaddr *) &their_addr, &sin_size);
+        const int client_fd = accept(socket_fd, (struct sockaddr *) &their_addr, &sin_size);
         if (client_fd == -1) {
             perror("accept");
             continue;
         }
 
-        // char buffer[256];
-        // if (recv(client_fd, buffer, sizeof buffer, 0) == -1) {
-        //     perror("recv");
-        //     continue;
-        // }
+        const pthread_t send_thread = edelay_spawn_thread();
+
+        char buffer[256];
+        ssize_t received;
+        while ((received = recv(client_fd, buffer, sizeof buffer, 0)) != -1) {
+            if (!queue_push(&packet_queue, received, buffer)) {
+                fprintf(stderr, "queue push fail");
+                break;
+            }
+        }
+        if (received == -1)
+            perror("recv");
         // printf("%s", buffer);
 
         // if (send(client_fd, buffer, numbytes + hdrbytes, 0) == -1) {
         //     perror("send");
         // }
-        close(client_fd);
-        break; // TODO:
-
-        // create a new thread to handle client request
-        /*pthread_t thread_id;
-        pthread_create(&thread_id, NULL, handle_client, (void *)client_fd);
-        pthread_detach(thread_id);*/
+        client_connected = false;
+        pthread_join(send_thread, nullptr);
+        if (received != -1)
+            close(client_fd);
     }
 
     close(socket_fd);
