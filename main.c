@@ -1,3 +1,5 @@
+#include <netdb.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <stdio.h>
 #include <netinet/in.h>
@@ -9,7 +11,8 @@
 #include "queue.h"
 #include "c23_compat.h"
 
-#define PORT 1935
+#define PORT "1935"
+#define DELAY_MS 1000
 
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
@@ -23,8 +26,8 @@ void edelay_queue_print_free() {
     printf("free %zu/%zu\n", queue_free_space(&packet_queue), queue_size(&packet_queue));
 }
 
-void edelay_push_message(const char *message, ssize_t size) {
-    bool success = queue_push(&packet_queue, size, message);
+void edelay_push_message(const char *message, const ssize_t size) {
+    const bool success = queue_push(&packet_queue, size, message);
     if (!success) {
         perror("Epic push fail");
         exit(EXIT_FAILURE);
@@ -38,7 +41,7 @@ bool edelay_pop_verify(const char *message, ssize_t size) {
 
     char buffer[QUEUE_ITEM_BUFFER_SIZE];
     ssize_t read;
-    bool result = queue_pop(&packet_queue, sizeof(buffer) / sizeof(char), buffer, &read);
+    const bool result = queue_pop(&packet_queue, sizeof(buffer) / sizeof(char), buffer, &read);
     printf("Have read %zd bytes\n", read);
     if (!result || read < size) {
         perror("Epic pop fail");
@@ -59,8 +62,7 @@ int main(void) {
     if (!queue_init(&packet_queue, 4 * QUEUE_ITEM_SIZE, QUEUE_OVERFLOW_RESIZE)) {
         perror("queue init failed");
         exit(EXIT_FAILURE);
-    }
-    {
+    } {
         edelay_queue_print_free();
         edelay_push_message(messij, sizeof(messij));
         edelay_push_message(messij2, sizeof(messij2));
@@ -75,59 +77,99 @@ int main(void) {
     }
 
     // TODO: the rest of the fucking owl
+    // Inspired by the Fastest Website Ever:
+    // https://github.com/diracdeltas/FastestWebsiteEver/blob/master/server/c/main.c
 
-    int server_fd;
-    struct sockaddr_in server_addr;
+    struct addrinfo hints;
+    bzero(&hints, sizeof hints);
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
 
-    // create server socket
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror("socket failed");
+    int result;
+    struct addrinfo *server_info;
+    if ((result = getaddrinfo(nullptr, PORT, &hints, &server_info)) != 0) {
+        fprintf(stderr, "Epic getaddrinfo fail: %s\n", gai_strerror(result));
         exit(EXIT_FAILURE);
     }
 
-    // config socket
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(PORT);
+    int socket_fd = -1; {
+        struct addrinfo *p;
+        int yes = 1;
+        for (p = server_info; p != NULL; p = p->ai_next) {
+            if ((socket_fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) {
+                perror("server: socket");
+                continue;
+            }
 
-    // bind socket to port
-    if (bind(server_fd,
-             (struct sockaddr *) &server_addr,
-             sizeof(server_addr)) < 0) {
-        perror("bind failed");
-        exit(EXIT_FAILURE);
+            if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1) {
+                perror("setsockopt reuseaddr");
+                exit(EXIT_FAILURE);
+            }
+
+            if (setsockopt(socket_fd, SOL_SOCKET, SO_BUSY_POLL, &yes, sizeof(yes)) == -1) {
+                perror("setsockopt busypoll");
+                // exit(EXIT_FAILURE);
+            }
+
+            if (setsockopt(socket_fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes)) == -1) {
+                perror("setsockopt tcp nodelay");
+                exit(EXIT_FAILURE);
+            }
+
+            if (bind(socket_fd, p->ai_addr, p->ai_addrlen) == -1) {
+                close(socket_fd);
+                perror("server: bind");
+                continue;
+            }
+
+            break;
+        }
+
+        freeaddrinfo(server_info);
+
+        if (p == nullptr) {
+            fprintf(stderr, "epic bind fail\n");
+            exit(EXIT_FAILURE);
+        }
+
+        if (listen(socket_fd, 0) == -1) {
+            perror("listen");
+            exit(EXIT_FAILURE);
+        }
     }
 
-    // listen for connections
-    if (listen(server_fd, 10) < 0) {
-        perror("listen failed");
-        exit(EXIT_FAILURE);
-    }
+    printf("Server listening on port %s\n", PORT);
 
-    printf("Server listening on port %d\n", PORT);
-    while (1) {
-        // client info
-        struct sockaddr_in client_addr;
-        socklen_t client_addr_len = sizeof(client_addr);
-        int *client_fd = malloc(sizeof(int));
-
-        // accept client connection
-        if ((*client_fd = accept(server_fd,
-                                 (struct sockaddr *) &client_addr,
-                                 &client_addr_len)) < 0) {
-            perror("accept failed");
+    while (true) {
+        struct sockaddr_storage their_addr;
+        socklen_t sin_size = sizeof their_addr;
+        int client_fd = accept(socket_fd, (struct sockaddr *) &their_addr, &sin_size);
+        if (client_fd == -1) {
+            perror("accept");
             continue;
         }
+
+        // char buffer[256];
+        // if (recv(client_fd, buffer, sizeof buffer, 0) == -1) {
+        //     perror("recv");
+        //     continue;
+        // }
+        // printf("%s", buffer);
+
+        // if (send(client_fd, buffer, numbytes + hdrbytes, 0) == -1) {
+        //     perror("send");
+        // }
+        close(client_fd);
+        break; // TODO:
 
         // create a new thread to handle client request
         /*pthread_t thread_id;
         pthread_create(&thread_id, NULL, handle_client, (void *)client_fd);
         pthread_detach(thread_id);*/
-        printf("TODO: handle client %i\n", *client_fd);
-        break;
     }
 
-    close(server_fd);
+    close(socket_fd);
     queue_destroy(&packet_queue);
     return 0;
 }
