@@ -13,12 +13,22 @@
 #include "c23_compat.h"
 
 #define PORT "1935"
-#define DELAY_US 1000000
+#define DELAY_US (1000000)
+#define DELAY_MS (DELAY_US / 1000)
+#define DELAY_S (DELAY_MS / 1000)
 
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
+#define MAX_QUEUED_PACKET_SIZE 2048
+
+typedef struct {
+    time_t timestamp;
+    char buffer[];
+} queued_packet_t;
+
 queue_t packet_queue;
 atomic_bool client_connected = false;
+atomic_bool cancel_request = false;
 
 const char messij[] = "Hellorld";
 const char messij2[] = "Test1";
@@ -65,33 +75,62 @@ void *edelay_resend_thread(void *arg) {
 
     usleep(DELAY_US);
 
-    char buffer[2048];
+    union {
+        queued_packet_t qp;
+        char buffer[MAX_QUEUED_PACKET_SIZE];
+    } qp_u;
+    qp_u.qp.timestamp = 0;
+
     ssize_t written;
     while (client_connected) {
         while (queue_is_empty(&packet_queue)) {
             sleep(0);
         }
 
-        // Repeat until we pop out the whole entry
-        do {
-            if (!queue_pop(&packet_queue, sizeof buffer, buffer, &written)) {
-                fprintf(stderr, "queue pop fail\n");
-                exit(EXIT_FAILURE);
-            }
+        if (!queue_pop(&packet_queue, sizeof(qp_u.buffer) / sizeof(qp_u.buffer[0]), qp_u.buffer, &written)) {
+            fprintf(stderr, "queue pop fail\n");
+            exit(EXIT_FAILURE);
+        }
+        if (written >= 0 && written <= sizeof(qp_u.qp.timestamp))
+            // Empty write
+            continue;
 
-            if (written > 0)
-                fwrite(buffer, sizeof(char), written, stdout);
-            else if (written < 0)
-                fwrite(buffer, sizeof(char), sizeof(buffer) / sizeof(char), stdout);
-        } while (written < 0);
+        // TODO: the resolution is low AF, should switch at least to milliseconds
+        const time_t difference = qp_u.qp.timestamp + DELAY_S - time(nullptr);
+        if (difference > 0)
+            sleep(difference);
+
+        if (cancel_request) {
+            cancel_request = false;
+            continue;
+        }
+
+        fwrite(qp_u.qp.buffer, sizeof(char), written > 0
+                                                     ? written - sizeof(qp_u.qp.timestamp)
+                                                     : sizeof(qp_u.buffer) / sizeof(char) - sizeof(qp_u.qp.timestamp),
+                   stdout);
+        fflush(stdout);
+
+        // Repeat until we pop out the whole entry
+        // do {
+        //     if (written > sizeof(qp_u.qp.timestamp) || written < 0)
+        //         printf("%lu ", qp_u.qp.timestamp);
+        //     fwrite(qp_u.qp.buffer, sizeof(char), written > 0
+        //                                              ? written - sizeof(qp_u.qp.timestamp)
+        //                                              : sizeof(qp_u.buffer) / sizeof(char) - sizeof(qp_u.qp.timestamp),
+        //            stdout);
+        //
+        //     if (!queue_pop(&packet_queue, sizeof(qp_u.buffer) / sizeof(qp_u.buffer[0]), qp_u.buffer, &written)) {
+        //         fprintf(stderr, "queue pop fail\n");
+        //         exit(EXIT_FAILURE);
+        //     }
+        // } while (written < 0);
     }
 
     return nullptr;
 }
 
 pthread_t edelay_spawn_thread() {
-    client_connected = true;
-
     pthread_t thread_id;
     pthread_create(&thread_id, NULL, edelay_resend_thread, nullptr);
     pthread_detach(thread_id);
@@ -191,12 +230,20 @@ int main(void) {
             continue;
         }
 
+        client_connected = true;
         const pthread_t send_thread = edelay_spawn_thread();
 
-        char buffer[256];
+        union {
+            queued_packet_t qp;
+            char buffer[MAX_QUEUED_PACKET_SIZE];
+        } qp_u;
         ssize_t received;
-        while ((received = recv(client_fd, buffer, sizeof buffer, 0)) != -1) {
-            if (!queue_push(&packet_queue, received, buffer)) {
+        while (client_connected
+               && (received = recv(client_fd, qp_u.qp.buffer,
+                                   sizeof(qp_u.buffer) / sizeof(qp_u.buffer[0]) - sizeof(qp_u.qp.timestamp),
+                                   0)) != -1) {
+            qp_u.qp.timestamp = time(nullptr);
+            if (!queue_push(&packet_queue, received + sizeof(qp_u.qp.timestamp), qp_u.buffer)) {
                 fprintf(stderr, "queue push fail");
                 break;
             }
